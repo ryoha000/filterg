@@ -16,5 +16,7 @@ fn main() {
         },
 
         Windows::Win32::Media::Audio::CoreAudio::{MMDeviceEnumerator, IMMDeviceEnumerator, IMMDevice},
+
+        Windows::Win32::Media::Multimedia::{HMMIO, mmioOpenW, MMIO_WRITE, MMIO_CREATE},
     );
 }
