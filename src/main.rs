@@ -1,7 +1,7 @@
-use process::device::get_default_device;
+use process::wmain;
 
 fn main() {
-    if let Ok(d) = get_default_device() {
-        println!("{:#?}", unsafe { d.GetId().unwrap() });
-    }
+    wmain().unwrap();
+
+    println!("end")
 }
