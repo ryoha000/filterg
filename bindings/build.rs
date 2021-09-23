@@ -5,9 +5,14 @@ fn main() {
             CLSIDFromProgID, CoInitializeEx, CoUninitialize, CoCreateInstance,
         },
 
+        Windows::Win32::System::Threading::CreateEventW,
+
+        Windows::Win32::System::Diagnostics::Debug::GetLastError,
+
         Windows::Win32::Foundation::{
             PWSTR, BSTR,
             SysFreeString,
+            CloseHandle
         },
 
         Windows::Win32::Media::Audio::CoreAudio::{MMDeviceEnumerator, IMMDeviceEnumerator, IMMDevice},
