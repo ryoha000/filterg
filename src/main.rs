@@ -1,3 +1,5 @@
+use process::a::print_feeds;
+
 fn main() {
-    println!("Hello, world!");
+    let _ = print_feeds();
 }
