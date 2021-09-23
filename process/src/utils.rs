@@ -23,3 +23,7 @@ impl Drop for CloseHandleOnExit {
 pub fn win32_error_to_windows_error(err: WIN32_ERROR) -> windows::Error {
     windows::Error::new(windows::HRESULT(0), &format!("{:#?}", err))
 }
+
+pub fn message_to_windows_error(msg: &str) -> windows::Error {
+    windows::Error::new(windows::HRESULT(0), msg)
+}
