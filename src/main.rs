@@ -1,5 +1,7 @@
-use process::a::print_feeds;
+use process::device::get_default_device;
 
 fn main() {
-    let _ = print_feeds();
+    if let Ok(d) = get_default_device() {
+        println!("{:#?}", unsafe { d.GetId().unwrap() });
+    }
 }
