@@ -87,10 +87,5 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
         (*wfx).nAvgBytesPerSec
     });
 
-    let mut ck_riff = MMCKINFO::default();
-    let mut ck_data = MMCKINFO::default();
-
-    write_wave_header(args.h_file, wfx, &mut ck_riff, &mut ck_data)?;
-
     Ok(0)
 }
