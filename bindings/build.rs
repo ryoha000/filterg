@@ -15,7 +15,7 @@ fn main() {
             CloseHandle
         },
 
-        Windows::Win32::Media::Audio::CoreAudio::{MMDeviceEnumerator, IMMDeviceEnumerator, IMMDevice, IAudioClient},
+        Windows::Win32::Media::Audio::CoreAudio::{MMDeviceEnumerator, IMMDeviceEnumerator, IMMDevice, IAudioClient, IAudioCaptureClient, AUDCLNT_STREAMFLAGS_LOOPBACK},
 
         Windows::Win32::Media::Multimedia::{HMMIO, mmioOpenW, mmioWrite, mmioAscend, mmioCreateChunk, MMIO_CREATERIFF, MMIO_WRITE, MMIO_CREATE, MMCKINFO, WAVEFORMATEX, MMSYSERR_NOERROR},
     );

@@ -1,9 +1,11 @@
 use super::device::get_default_device;
 use super::event::create_event;
-use super::file::{open_file, write_wave_header};
+use super::file::open_file;
 use super::utils::{CloseHandleOnExit, CoUninitializeOnExit};
-use bindings::Windows::Win32::Media::Audio::CoreAudio::IAudioClient;
-use bindings::Windows::Win32::Media::Multimedia::{HMMIO, MMCKINFO};
+use bindings::Windows::Win32::Media::Audio::CoreAudio::{
+    IAudioCaptureClient, IAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+};
+use bindings::Windows::Win32::Media::Multimedia::HMMIO;
 use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use bindings::Windows::Win32::System::Threading::CreateWaitableTimerW;
 use bindings::Windows::Win32::{Foundation::HANDLE, Media::Audio::CoreAudio::IMMDevice};
@@ -93,6 +95,26 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
         return Err(windows::Error::from_win32());
     }
     let _h_wake_up = CloseHandleOnExit { handle: h_wake_up };
+
+    let n_block_align = unsafe { (*wfx).nBlockAlign };
+
+    unsafe {
+        audio_client.Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_LOOPBACK,
+            0,
+            0,
+            wfx,
+            ptr::null(),
+        )?
+    };
+
+    let audio_capture_client = unsafe {
+        let mut audio_capture_client = ptr::null_mut();
+
+        audio_client.GetService(&IAudioCaptureClient::IID, &mut audio_capture_client)?;
+        mem::transmute::<_, IAudioCaptureClient>(audio_capture_client)
+    };
 
     Ok(0)
 }
