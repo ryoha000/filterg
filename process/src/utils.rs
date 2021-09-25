@@ -51,3 +51,5 @@ pub fn message_to_windows_error(msg: &str) -> windows::Error {
     println!("ERROR!!!. msg: {}", msg);
     windows::Error::new(windows::HRESULT(0), msg)
 }
+
+pub const AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY: u32 = 1;

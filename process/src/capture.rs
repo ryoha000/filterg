@@ -1,4 +1,6 @@
-use crate::utils::{message_to_windows_error, CancelWaitableTimerOnExit};
+use crate::utils::{
+    message_to_windows_error, CancelWaitableTimerOnExit, AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY,
+};
 
 use super::device::get_default_device;
 use super::event::create_event;
@@ -9,7 +11,9 @@ use bindings::Windows::Win32::Media::Audio::CoreAudio::{
 };
 use bindings::Windows::Win32::Media::Multimedia::HMMIO;
 use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
-use bindings::Windows::Win32::System::Threading::{CreateWaitableTimerW, SetWaitableTimer};
+use bindings::Windows::Win32::System::Threading::{
+    CreateWaitableTimerW, SetWaitableTimer, WaitForMultipleObjects, WAIT_OBJECT_0,
+};
 use bindings::Windows::Win32::{Foundation::HANDLE, Media::Audio::CoreAudio::IMMDevice};
 use std::panic::panic_any;
 use std::sync::atomic::AtomicBool;
@@ -103,8 +107,6 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
     }
     let _h_wake_up = CloseHandleOnExit { handle: h_wake_up };
 
-    let n_block_align = unsafe { (*wfx).nBlockAlign };
-
     unsafe {
         audio_client.Initialize(
             AUDCLNT_SHAREMODE_SHARED,
@@ -148,5 +150,74 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
             e
         )));
     }
+
+    let mut is_done = false;
+    let mut is_first_packet = true;
+    let mut passes = 0;
+    let mut frames = 0;
+    while !is_done {
+        loop {
+            let next_packet_size = unsafe { audio_capture_client.GetNextPacketSize()? };
+            if next_packet_size <= 0 {
+                break;
+            }
+            let mut data: u8 = 0;
+            let mut num_frames_to_read = 0;
+            let mut flags = 0;
+            unsafe {
+                audio_capture_client.GetBuffer(
+                    &mut data as *mut u8 as *mut *mut u8,
+                    &mut num_frames_to_read,
+                    &mut flags,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                )?
+            }
+
+            if is_first_packet && AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY == flags {
+                return Err(message_to_windows_error(
+                    &"Probably spurious glitch reported on first packet",
+                ));
+            } else if 0 != flags {
+                return Err(message_to_windows_error(&format!(
+                    "IAudioCaptureClient::GetBuffer set flags to {} on pass {} after {} frames",
+                    flags, passes, frames
+                )));
+            }
+
+            if 0 == num_frames_to_read {
+                return Err(message_to_windows_error(&format!("IAudioCaptureClient::GetBuffer said to read 0 frames on pass {} after {} frames", passes, frames)));
+            }
+
+            // TODO: ここに処理
+
+            frames += num_frames_to_read;
+
+            unsafe {
+                audio_capture_client.ReleaseBuffer(num_frames_to_read)?;
+            }
+
+            is_first_packet = false;
+        }
+
+        // timer をまつ
+        let wait_result = unsafe { WaitForMultipleObjects(1, &h_wake_up, false, u32::MAX) };
+        if wait_result != WAIT_OBJECT_0 {
+            return Err(message_to_windows_error(&format!(
+                "Unexpected WaitForMultipleObjects return value {:?} on pass {} after {} frames",
+                wait_result, passes, frames
+            )));
+        }
+
+        // main thread から stop event が来たかどうか
+        let is_stopped = args.is_stopped.load(std::sync::atomic::Ordering::AcqRel);
+        if is_stopped {
+            is_done = true;
+        }
+        passes += 1;
+    }
+
+    // TODO: ここに終了処理
+
     Ok(0)
 }
