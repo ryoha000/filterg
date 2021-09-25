@@ -1,5 +1,8 @@
 use bindings::Windows::Win32::Foundation::{CloseHandle, HANDLE};
+use bindings::Windows::Win32::Media::Audio::CoreAudio::IAudioClient3;
 use bindings::Windows::Win32::System::Com::CoUninitialize;
+use bindings::Windows::Win32::System::Diagnostics::Debug::GetLastError;
+use bindings::Windows::Win32::System::Threading::CancelWaitableTimer;
 
 pub struct CoUninitializeOnExit {}
 
@@ -16,6 +19,31 @@ pub struct CloseHandleOnExit {
 impl Drop for CloseHandleOnExit {
     fn drop(&mut self) {
         unsafe { CloseHandle(self.handle) };
+    }
+}
+
+pub struct CancelWaitableTimerOnExit {
+    pub handle: HANDLE,
+}
+
+impl Drop for CancelWaitableTimerOnExit {
+    fn drop(&mut self) {
+        let result = unsafe { CancelWaitableTimer(self.handle) };
+        if !result.as_bool() {
+            panic!("panic in drop CancelWaitableTimerOnExit {:#?}", unsafe {
+                GetLastError()
+            });
+        }
+    }
+}
+
+pub struct AudioClientStopOnExit {
+    pub client: IAudioClient3,
+}
+
+impl Drop for AudioClientStopOnExit {
+    fn drop(&mut self) {
+        unsafe { self.client.Stop() }.unwrap();
     }
 }
 

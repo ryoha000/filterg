@@ -7,7 +7,7 @@ fn main() {
             CLSIDFromProgID, CoInitializeEx, CoUninitialize, CoCreateInstance,
         },
 
-        Windows::Win32::System::Threading::{CreateEventW, CreateWaitableTimerW},
+        Windows::Win32::System::Threading::{CreateEventW, CreateWaitableTimerW, SetWaitableTimer, CancelWaitableTimer},
 
         Windows::Win32::Foundation::{
             PWSTR, BSTR,

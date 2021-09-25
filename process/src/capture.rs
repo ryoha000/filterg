@@ -1,3 +1,5 @@
+use crate::utils::{message_to_windows_error, CancelWaitableTimerOnExit};
+
 use super::device::get_default_device;
 use super::event::create_event;
 use super::file::open_file;
@@ -7,7 +9,7 @@ use bindings::Windows::Win32::Media::Audio::CoreAudio::{
 };
 use bindings::Windows::Win32::Media::Multimedia::HMMIO;
 use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
-use bindings::Windows::Win32::System::Threading::CreateWaitableTimerW;
+use bindings::Windows::Win32::System::Threading::{CreateWaitableTimerW, SetWaitableTimer};
 use bindings::Windows::Win32::{Foundation::HANDLE, Media::Audio::CoreAudio::IMMDevice};
 use std::panic::panic_any;
 use std::sync::mpsc::Sender;
@@ -119,5 +121,28 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
 
     // TODO: AvSetMmThreadCharacteristics を呼ぶか work queue を使うようにする(非オーディオサブシステムによる干渉のムラをなくす？)
 
+    let b_ok = unsafe {
+        SetWaitableTimer(
+            h_wake_up,
+            &(-hns_default_device_period / 2),
+            hns_default_device_period as i32 / 2 / (10 * 1000), // per 0.5s
+            None,
+            ptr::null(),
+            false,
+        )
+    };
+    if !b_ok.as_bool() {
+        return Err(windows::Error::from_win32());
+    }
+    let _cancel_timer = CancelWaitableTimerOnExit { handle: h_wake_up };
+
+    unsafe { audio_client.Start()? };
+
+    if let Err(e) = tx.send(CaptureEvent::Start) {
+        return Err(message_to_windows_error(&format!(
+            "send start error. {:#?}",
+            e
+        )));
+    }
     Ok(0)
 }
