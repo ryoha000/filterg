@@ -12,6 +12,7 @@ use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED
 use bindings::Windows::Win32::System::Threading::{CreateWaitableTimerW, SetWaitableTimer};
 use bindings::Windows::Win32::{Foundation::HANDLE, Media::Audio::CoreAudio::IMMDevice};
 use std::panic::panic_any;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::{mem, ptr};
 use windows::Interface;
@@ -19,7 +20,7 @@ use windows::Interface;
 pub struct Args {
     pub mm_device: IMMDevice,
     pub h_file: HMMIO,
-    pub h_stop_event: HANDLE,
+    pub is_stopped: AtomicBool,
     pub n_frames: u32,
 }
 
@@ -42,7 +43,10 @@ impl Drop for DeferChan {
     }
 }
 
-pub fn capture_thread_func(tx: Sender<CaptureEvent>) -> windows::Result<u8> {
+pub fn capture_thread_func(
+    tx: Sender<CaptureEvent>,
+    is_stopped: AtomicBool,
+) -> windows::Result<u8> {
     let _defer = DeferChan { tx: tx.clone() };
 
     unsafe { CoInitializeEx(ptr::null_mut(), COINIT_MULTITHREADED)? };
@@ -64,7 +68,7 @@ pub fn capture_thread_func(tx: Sender<CaptureEvent>) -> windows::Result<u8> {
     let args = Args {
         mm_device: default_device,
         h_file: open_file("filterg_save.wav")?,
-        h_stop_event,
+        is_stopped,
         n_frames: 0,
     };
 
