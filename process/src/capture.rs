@@ -3,7 +3,7 @@ use super::event::create_event;
 use super::file::open_file;
 use super::utils::{CloseHandleOnExit, CoUninitializeOnExit};
 use bindings::Windows::Win32::Media::Audio::CoreAudio::{
-    IAudioCaptureClient, IAudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    IAudioCaptureClient, IAudioClient3, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
 };
 use bindings::Windows::Win32::Media::Multimedia::HMMIO;
 use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
@@ -73,12 +73,13 @@ pub fn capture_thread_func(tx: Sender<CaptureEvent>) -> windows::Result<u8> {
 }
 
 fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
-    let audio_client: IAudioClient = unsafe {
+    // TODO: https://docs.microsoft.com/en-us/windows-hardware/drivers/audio/low-latency-audio#windows-audio-session-api-wasapi
+    let audio_client: IAudioClient3 = unsafe {
         let mut audio_client = ptr::null_mut();
 
         args.mm_device
-            .Activate(&IAudioClient::IID, 0x17, ptr::null(), &mut audio_client)?;
-        mem::transmute::<_, IAudioClient>(audio_client)
+            .Activate(&IAudioClient3::IID, 0x17, ptr::null(), &mut audio_client)?;
+        mem::transmute::<_, IAudioClient3>(audio_client)
     };
 
     let mut hns_default_device_period = 0;
@@ -115,6 +116,8 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
         audio_client.GetService(&IAudioCaptureClient::IID, &mut audio_capture_client)?;
         mem::transmute::<_, IAudioCaptureClient>(audio_capture_client)
     };
+
+    // TODO: AvSetMmThreadCharacteristics を呼ぶか work queue を使うようにする(非オーディオサブシステムによる干渉のムラをなくす？)
 
     Ok(0)
 }
