@@ -5,6 +5,7 @@ use super::utils::{CloseHandleOnExit, CoUninitializeOnExit};
 use bindings::Windows::Win32::Media::Audio::CoreAudio::IAudioClient;
 use bindings::Windows::Win32::Media::Multimedia::{HMMIO, MMCKINFO};
 use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+use bindings::Windows::Win32::System::Threading::CreateWaitableTimerW;
 use bindings::Windows::Win32::{Foundation::HANDLE, Media::Audio::CoreAudio::IMMDevice};
 use std::panic::panic_any;
 use std::sync::mpsc::Sender;
@@ -86,6 +87,12 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
     println!("wfx.nAvgBytesPerSec: {:#?}", unsafe {
         (*wfx).nAvgBytesPerSec
     });
+
+    let h_wake_up = unsafe { CreateWaitableTimerW(ptr::null(), false, None) };
+    if h_wake_up == HANDLE(0) {
+        return Err(windows::Error::from_win32());
+    }
+    let _h_wake_up = CloseHandleOnExit { handle: h_wake_up };
 
     Ok(0)
 }
