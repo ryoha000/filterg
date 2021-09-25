@@ -1,6 +1,6 @@
 use super::device::get_default_device;
 use super::event::create_event;
-use super::file::open_file;
+use super::file::{open_file, write_wave_header};
 use super::utils::{CloseHandleOnExit, CoUninitializeOnExit};
 use bindings::Windows::Win32::Media::Audio::CoreAudio::IAudioClient;
 use bindings::Windows::Win32::Media::Multimedia::{HMMIO, MMCKINFO};
@@ -86,6 +86,11 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
     println!("wfx.nAvgBytesPerSec: {:#?}", unsafe {
         (*wfx).nAvgBytesPerSec
     });
+
+    let mut ck_riff = MMCKINFO::default();
+    let mut ck_data = MMCKINFO::default();
+
+    write_wave_header(args.h_file, wfx, &mut ck_riff, &mut ck_data)?;
 
     Ok(0)
 }
