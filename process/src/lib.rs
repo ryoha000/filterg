@@ -1,6 +1,7 @@
 mod capture;
 mod device;
 mod event;
+mod fft;
 mod file;
 mod utils;
 
@@ -42,7 +43,7 @@ fn do_everything() -> windows::Result<u8> {
 
     println!("start capture");
 
-    let sleep_time = std::time::Duration::from_secs(10);
+    let sleep_time = std::time::Duration::from_secs(1);
     thread::sleep(sleep_time);
 
     is_stopped.store(true, std::sync::atomic::Ordering::SeqCst);

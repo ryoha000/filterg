@@ -1,5 +1,6 @@
+use crate::fft;
+
 use super::device::get_default_device;
-use super::event::create_event;
 use super::file::open_file;
 use super::utils::{message_to_windows_error, CancelWaitableTimerOnExit};
 use super::utils::{CloseHandleOnExit, CoUninitializeOnExit};
@@ -62,12 +63,6 @@ pub fn capture_thread_func(
     println!("default_device.GetId(): {:#?}", unsafe {
         default_device.GetId().unwrap()
     });
-
-    let h_stop_event = create_event()?;
-    let _h_stop_event = CloseHandleOnExit {
-        handle: h_stop_event,
-    };
-    println!("h_stop_event: {:#?}", h_stop_event);
 
     let args = Args {
         mm_device: default_device,
@@ -181,6 +176,8 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
         )));
     }
 
+    let mut arr: Vec<Vec<f32>> = vec![vec![], vec![]];
+
     let mut is_done = false;
     let mut is_first_packet = true;
     let mut passes = 0;
@@ -233,6 +230,8 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
                         // TODO: 分岐u32
                         let sample = ptr::read(sample_u8);
                         writer.write_sample(sample).unwrap();
+
+                        arr[chan as usize].push(sample);
                     }
                 }
             }
@@ -262,6 +261,8 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
         }
         passes += 1;
     }
+
+    fft::kakko_kari(arr);
 
     // TODO: ここに終了処理
     writer.finalize().unwrap();

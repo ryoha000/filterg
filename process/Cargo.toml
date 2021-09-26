@@ -9,4 +9,6 @@ edition = "2018"
 bindings = { path = "../bindings" }
 windows = "0.20.1"
 hound = "3.4"
+rustfft = "6.0.1"
+plotters = "0.3.1"
 # winapi = { version = "0.3", features = ["avrt"] }
