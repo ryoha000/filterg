@@ -8,3 +8,5 @@ edition = "2018"
 [dependencies] 
 bindings = { path = "../bindings" }
 windows = "0.20.1"
+hound = "3.4"
+# winapi = { version = "0.3", features = ["avrt"] }

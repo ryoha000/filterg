@@ -1,10 +1,7 @@
-use crate::utils::{
-    message_to_windows_error, CancelWaitableTimerOnExit, AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY,
-};
-
 use super::device::get_default_device;
 use super::event::create_event;
 use super::file::open_file;
+use super::utils::{message_to_windows_error, CancelWaitableTimerOnExit};
 use super::utils::{CloseHandleOnExit, CoUninitializeOnExit};
 use bindings::Windows::Win32::Media::Audio::CoreAudio::{
     IAudioCaptureClient, IAudioClient3, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
@@ -15,16 +12,19 @@ use bindings::Windows::Win32::System::Threading::{
     CreateWaitableTimerW, SetWaitableTimer, WaitForMultipleObjects, WAIT_OBJECT_0,
 };
 use bindings::Windows::Win32::{Foundation::HANDLE, Media::Audio::CoreAudio::IMMDevice};
+use std::ffi::OsStr;
+use std::os::windows::prelude::OsStrExt;
 use std::panic::panic_any;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::{mem, ptr};
 use windows::Interface;
 
 pub struct Args {
     pub mm_device: IMMDevice,
     pub h_file: HMMIO,
-    pub is_stopped: AtomicBool,
+    pub is_stopped: Arc<AtomicBool>,
     pub n_frames: u32,
 }
 
@@ -49,7 +49,7 @@ impl Drop for DeferChan {
 
 pub fn capture_thread_func(
     tx: Sender<CaptureEvent>,
-    is_stopped: AtomicBool,
+    is_stopped: Arc<AtomicBool>,
 ) -> windows::Result<u8> {
     let _defer = DeferChan { tx: tx.clone() };
 
@@ -100,6 +100,20 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
     println!("wfx.nAvgBytesPerSec: {:#?}", unsafe {
         (*wfx).nAvgBytesPerSec
     });
+    println!("wfx.nBlockAlign: {:#?}", unsafe { (*wfx).nBlockAlign });
+
+    let block_align = unsafe { (*wfx).nBlockAlign };
+    let n_channel = unsafe { (*wfx).nChannels };
+
+    // TODO: 以下の処理を別スレッドでやる
+    let spec = hound::WavSpec {
+        channels: n_channel,
+        sample_rate: unsafe { (*wfx).nSamplesPerSec },
+        bits_per_sample: unsafe { (*wfx).wBitsPerSample } as u16,
+        sample_format: hound::SampleFormat::Float,
+    };
+    println!("{:#?}", spec);
+    let mut writer = hound::WavWriter::create("horror.wav", spec).unwrap();
 
     let h_wake_up = unsafe { CreateWaitableTimerW(ptr::null(), false, None) };
     if h_wake_up == HANDLE(0) {
@@ -127,11 +141,27 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
 
     // TODO: AvSetMmThreadCharacteristics を呼ぶか work queue を使うようにする(非オーディオサブシステムによる干渉のムラをなくす？)
 
+    // let task = unsafe {
+    //     winapi::um::avrt::AvSetMmThreadCharacteristicsW(
+    //         OsStr::new("Audio")
+    //             .encode_wide()
+    //             .chain(std::iter::once(0))
+    //             .collect::<Vec<_>>()
+    //             .as_ptr(),
+    //         &mut 0,
+    //     )
+    // };
+    // println!("task.isnull: {}", task.is_null());
+    // if task.is_null() {
+    //     println!("{:#?}", unsafe { GetLastError() })
+    // }
+    // let _task = AvRevertMmThreadCharacteristicsOnExit { h: task };
+
     let b_ok = unsafe {
         SetWaitableTimer(
             h_wake_up,
             &(-hns_default_device_period / 2),
-            hns_default_device_period as i32 / 2 / (10 * 1000), // per 0.5s
+            (hns_default_device_period / 2 / (10 * 1000)) as i32, // hns_default_device_period / 2ms
             None,
             ptr::null(),
             false,
@@ -154,44 +184,60 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
     let mut is_done = false;
     let mut is_first_packet = true;
     let mut passes = 0;
-    let mut frames = 0;
+    let mut frames: u64 = 0;
     while !is_done {
         loop {
             let next_packet_size = unsafe { audio_capture_client.GetNextPacketSize()? };
             if next_packet_size <= 0 {
                 break;
             }
-            let mut data: u8 = 0;
+
+            let mut data = ptr::null_mut::<u8>();
             let mut num_frames_to_read = 0;
             let mut flags = 0;
             unsafe {
                 audio_capture_client.GetBuffer(
-                    &mut data as *mut u8 as *mut *mut u8,
+                    &mut data,
                     &mut num_frames_to_read,
                     &mut flags,
                     ptr::null_mut(),
                     ptr::null_mut(),
                 )?
             }
+            // println!("flags: {}", flags);
 
-            if is_first_packet && AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY == flags {
-                return Err(message_to_windows_error(
-                    &"Probably spurious glitch reported on first packet",
-                ));
-            } else if 0 != flags {
-                return Err(message_to_windows_error(&format!(
-                    "IAudioCaptureClient::GetBuffer set flags to {} on pass {} after {} frames",
-                    flags, passes, frames
-                )));
-            }
+            // if is_first_packet && AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY == flags {
+            //     return Err(message_to_windows_error(
+            //         &"Probably spurious glitch reported on first packet",
+            //     ));
+            // } else if 0 != flags {
+            //     return Err(message_to_windows_error(&format!(
+            //         "IAudioCaptureClient::GetBuffer set flags to {} on pass {} after {} frames",
+            //         flags, passes, frames
+            //     )));
+            // }
 
             if 0 == num_frames_to_read {
                 return Err(message_to_windows_error(&format!("IAudioCaptureClient::GetBuffer said to read 0 frames on pass {} after {} frames", passes, frames)));
             }
 
             // TODO: ここに処理
+            for data_index in 0..num_frames_to_read {
+                for chan in 0..n_channel {
+                    unsafe {
+                        let sample_u8 = data.offset(
+                            (data_index * block_align as u32
+                                + (chan * block_align / n_channel) as u32)
+                                as isize,
+                        ) as *const f32;
+                        // TODO: 分岐u32
+                        let sample = ptr::read(sample_u8);
+                        writer.write_sample(sample).unwrap();
+                    }
+                }
+            }
 
-            frames += num_frames_to_read;
+            frames += num_frames_to_read as u64;
 
             unsafe {
                 audio_capture_client.ReleaseBuffer(num_frames_to_read)?;
@@ -210,7 +256,7 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
         }
 
         // main thread から stop event が来たかどうか
-        let is_stopped = args.is_stopped.load(std::sync::atomic::Ordering::AcqRel);
+        let is_stopped = args.is_stopped.load(std::sync::atomic::Ordering::SeqCst);
         if is_stopped {
             is_done = true;
         }
@@ -218,6 +264,7 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
     }
 
     // TODO: ここに終了処理
+    writer.finalize().unwrap();
 
     Ok(0)
 }
