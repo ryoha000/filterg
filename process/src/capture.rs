@@ -1,32 +1,28 @@
-use crate::fft;
-
 use super::device::get_default_device;
-use super::file::open_file;
+use super::fft::FftQueue;
 use super::utils::{message_to_windows_error, CancelWaitableTimerOnExit};
 use super::utils::{CloseHandleOnExit, CoUninitializeOnExit};
 use bindings::Windows::Win32::Media::Audio::CoreAudio::{
     IAudioCaptureClient, IAudioClient3, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
 };
-use bindings::Windows::Win32::Media::Multimedia::HMMIO;
 use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use bindings::Windows::Win32::System::Threading::{
     CreateWaitableTimerW, SetWaitableTimer, WaitForMultipleObjects, WAIT_OBJECT_0,
 };
 use bindings::Windows::Win32::{Foundation::HANDLE, Media::Audio::CoreAudio::IMMDevice};
+use hound::WavSpec;
 use std::ffi::OsStr;
 use std::os::windows::prelude::OsStrExt;
 use std::panic::panic_any;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{mem, ptr};
 use windows::Interface;
 
 pub struct Args {
     pub mm_device: IMMDevice,
-    pub h_file: HMMIO,
     pub is_stopped: Arc<AtomicBool>,
-    pub n_frames: u32,
 }
 
 #[derive(Debug)]
@@ -50,7 +46,9 @@ impl Drop for DeferChan {
 
 pub fn capture_thread_func(
     tx: Sender<CaptureEvent>,
+    tx_wf: Sender<WavSpec>,
     is_stopped: Arc<AtomicBool>,
+    fft_queue: Arc<Mutex<FftQueue>>,
 ) -> windows::Result<u8> {
     let _defer = DeferChan { tx: tx.clone() };
 
@@ -66,18 +64,21 @@ pub fn capture_thread_func(
 
     let args = Args {
         mm_device: default_device,
-        h_file: open_file("filterg_save.wav")?,
         is_stopped,
-        n_frames: 0,
     };
 
     println!("stup args. ");
 
-    capture(tx, args)?;
+    capture(tx, tx_wf, fft_queue, args)?;
     Ok(0)
 }
 
-fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
+fn capture(
+    tx: Sender<CaptureEvent>,
+    tx_wf: Sender<WavSpec>,
+    fft_queue: Arc<Mutex<FftQueue>>,
+    args: Args,
+) -> windows::Result<u8> {
     // TODO: https://docs.microsoft.com/en-us/windows-hardware/drivers/audio/low-latency-audio#windows-audio-session-api-wasapi
     let audio_client: IAudioClient3 = unsafe {
         let mut audio_client = ptr::null_mut();
@@ -100,15 +101,19 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
     let block_align = unsafe { (*wfx).nBlockAlign };
     let n_channel = unsafe { (*wfx).nChannels };
 
-    // TODO: 以下の処理を別スレッドでやる
-    let spec = hound::WavSpec {
+    let spec = WavSpec {
         channels: n_channel,
         sample_rate: unsafe { (*wfx).nSamplesPerSec },
         bits_per_sample: unsafe { (*wfx).wBitsPerSample } as u16,
         sample_format: hound::SampleFormat::Float,
     };
-    println!("{:#?}", spec);
-    let mut writer = hound::WavWriter::create("horror.wav", spec).unwrap();
+    if let Err(e) = tx_wf.send(spec) {
+        return Err(message_to_windows_error(&format!(
+            "send wave format error. {:#?}",
+            e
+        )));
+    }
+    set_fft_queue_size(fft_queue.clone(), n_channel);
 
     let h_wake_up = unsafe { CreateWaitableTimerW(ptr::null(), false, None) };
     if h_wake_up == HANDLE(0) {
@@ -218,6 +223,7 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
                 return Err(message_to_windows_error(&format!("IAudioCaptureClient::GetBuffer said to read 0 frames on pass {} after {} frames", passes, frames)));
             }
 
+            let mut f = fft_queue.lock().unwrap();
             // TODO: ここに処理
             for data_index in 0..num_frames_to_read {
                 for chan in 0..n_channel {
@@ -227,9 +233,10 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
                                 + (chan * block_align / n_channel) as u32)
                                 as isize,
                         ) as *const f32;
-                        // TODO: 分岐u32
+                        // TODO: 分岐f32
                         let sample = ptr::read(sample_u8);
-                        writer.write_sample(sample).unwrap();
+                        f.push(chan as usize, sample);
+                        // writer.write_sample(sample).unwrap();
 
                         arr[chan as usize].push(sample);
                     }
@@ -262,10 +269,14 @@ fn capture(tx: Sender<CaptureEvent>, args: Args) -> windows::Result<u8> {
         passes += 1;
     }
 
-    fft::kakko_kari(arr);
-
     // TODO: ここに終了処理
-    writer.finalize().unwrap();
+    // fft::kakko_kari(arr);
+    // writer.finalize().unwrap();
 
     Ok(0)
+}
+
+fn set_fft_queue_size(fft_queue: Arc<Mutex<FftQueue>>, n_channel: u16) {
+    let mut f = fft_queue.lock().unwrap();
+    f.set_size(n_channel as u32);
 }

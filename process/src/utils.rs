@@ -83,3 +83,5 @@ pub fn to_wide_chars(s: &str) -> Vec<u16> {
         .chain(Some(0).into_iter())
         .collect::<Vec<_>>()
 }
+
+pub const AUDCLNT_BUFFERFLAGS_SILENT: u32 = 2;

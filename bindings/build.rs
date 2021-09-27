@@ -15,7 +15,7 @@ fn main() {
             CloseHandle
         },
 
-        Windows::Win32::Media::Audio::CoreAudio::{MMDeviceEnumerator, IMMDeviceEnumerator, IMMDevice, IMMDeviceCollection, IAudioClient3, IAudioCaptureClient, AUDCLNT_STREAMFLAGS_LOOPBACK, DEVICE_STATE_ACTIVE},
+        Windows::Win32::Media::Audio::CoreAudio::{MMDeviceEnumerator, IMMDeviceEnumerator, IMMDevice, IMMDeviceCollection, IAudioClient3, IAudioRenderClient, IAudioCaptureClient, AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, DEVICE_STATE_ACTIVE},
 
         Windows::Win32::Storage::StructuredStorage::STGM_READ,
 
