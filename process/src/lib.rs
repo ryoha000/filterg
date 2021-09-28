@@ -77,9 +77,9 @@ fn do_everything() -> windows::Result<u8> {
     let is_silence = Arc::new(AtomicBool::new(true));
     let is_silence_clone = is_silence.clone();
 
-    // let render_thread = thread::spawn(move || {
-    //     render::render_thread_func(render_queue, is_stopped_render, is_silence_clone)
-    // });
+    let render_thread = thread::spawn(move || {
+        render::render_thread_func(render_queue, is_stopped_render, is_silence_clone)
+    });
 
     let sleep_time = std::time::Duration::from_secs(5);
     thread::sleep(sleep_time);
@@ -87,7 +87,7 @@ fn do_everything() -> windows::Result<u8> {
     is_stopped.store(true, std::sync::atomic::Ordering::SeqCst);
 
     capture_thread.join().unwrap()?;
-    // render_thread.join().unwrap()?;
+    render_thread.join().unwrap()?;
     fft_thread.join().unwrap();
 
     Ok(0)

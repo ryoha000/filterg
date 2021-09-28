@@ -1,7 +1,9 @@
 use super::device::get_default_device;
 use super::event::create_event;
-use super::utils::message_to_windows_error;
-use super::utils::{CoUninitializeOnExit, AUDCLNT_BUFFERFLAGS_SILENT};
+use super::utils::{
+    message_to_windows_error, AudioClientStopOnExit, CoUninitializeOnExit,
+    AUDCLNT_BUFFERFLAGS_SILENT,
+};
 use bindings::Windows::Win32::Media::Audio::CoreAudio::IMMDevice;
 use bindings::Windows::Win32::Media::Audio::CoreAudio::{
     IAudioClient3, IAudioRenderClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -79,6 +81,9 @@ fn render(args: Args) -> windows::Result<u8> {
         args.mm_device
             .Activate(&IAudioClient3::IID, 0x17, ptr::null(), &mut audio_client)?;
         mem::transmute::<_, IAudioClient3>(audio_client)
+    };
+    let _audio_client = AudioClientStopOnExit {
+        client: &audio_client,
     };
 
     let wfx = unsafe { audio_client.GetMixFormat()? };
@@ -159,7 +164,12 @@ fn render(args: Args) -> windows::Result<u8> {
         // TODO: data に値を入れる(float32)
 
         // TODO: data に値を入れたら AUDCLNT_BUFFERFLAGS_SILENT を 0 にする
-        unsafe { audio_render_client.ReleaseBuffer(frames_in_buffer, AUDCLNT_BUFFERFLAGS_SILENT)? };
+        unsafe {
+            audio_render_client.ReleaseBuffer(
+                frames_in_buffer - frames_of_padding,
+                AUDCLNT_BUFFERFLAGS_SILENT,
+            )?
+        };
 
         // main thread から stop event が来たかどうか
         let is_stopped = args.is_stopped.load(std::sync::atomic::Ordering::SeqCst);

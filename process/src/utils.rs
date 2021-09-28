@@ -37,11 +37,11 @@ impl Drop for CancelWaitableTimerOnExit {
     }
 }
 
-pub struct AudioClientStopOnExit {
-    pub client: IAudioClient3,
+pub struct AudioClientStopOnExit<'a> {
+    pub client: &'a IAudioClient3,
 }
 
-impl Drop for AudioClientStopOnExit {
+impl<'a> Drop for AudioClientStopOnExit<'a> {
     fn drop(&mut self) {
         unsafe { self.client.Stop() }.unwrap();
     }

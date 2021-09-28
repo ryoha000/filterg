@@ -1,7 +1,7 @@
 use super::device::get_default_device;
 use super::fft::FftQueue;
 use super::utils::{message_to_windows_error, CancelWaitableTimerOnExit};
-use super::utils::{CloseHandleOnExit, CoUninitializeOnExit};
+use super::utils::{AudioClientStopOnExit, CloseHandleOnExit, CoUninitializeOnExit};
 use bindings::Windows::Win32::Media::Audio::CoreAudio::{
     IAudioCaptureClient, IAudioClient3, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
 };
@@ -86,6 +86,9 @@ fn capture(
         args.mm_device
             .Activate(&IAudioClient3::IID, 0x17, ptr::null(), &mut audio_client)?;
         mem::transmute::<_, IAudioClient3>(audio_client)
+    };
+    let _audio_client = AudioClientStopOnExit {
+        client: &audio_client,
     };
 
     let mut hns_default_device_period = 0;
