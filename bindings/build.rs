@@ -23,6 +23,6 @@ fn main() {
 
         Windows::Win32::System::SystemServices::DEVPKEY_Device_FriendlyName,
 
-        Windows::Win32::Media::Multimedia::{HMMIO, mmioOpenW, mmioWrite, mmioAscend, mmioCreateChunk, MMIO_CREATERIFF, MMIO_WRITE, MMIO_CREATE, MMCKINFO, WAVEFORMATEX, MMSYSERR_NOERROR},
+        Windows::Win32::Media::Multimedia::{WAVE_FORMAT_IEEE_FLOAT},
     );
 }
