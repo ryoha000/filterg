@@ -8,11 +8,13 @@ use bindings::Windows::Win32::Media::Audio::CoreAudio::IMMDevice;
 use bindings::Windows::Win32::Media::Audio::CoreAudio::{
     IAudioClient3, IAudioRenderClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
 };
+use bindings::Windows::Win32::Media::Multimedia::WAVE_FORMAT_IEEE_FLOAT;
 use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use bindings::Windows::Win32::System::Threading::{WaitForMultipleObjects, WAIT_OBJECT_0};
 use rustfft::num_complex::Complex32;
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, Mutex};
 use std::{mem, ptr};
 use windows::Interface;
@@ -32,6 +34,16 @@ impl RenderQueue {
     pub fn new(n_chan: u16) -> RenderQueue {
         let mut queue = Vec::new();
         for _ in 0..n_chan {
+            // ↓は10Hzの音を再生するサンプル
+            // let mut v = VecDeque::new();
+            // for _ in 0..3 {
+            //     for t in (0..48000).map(|x| x as f32 / 48000.0) {
+            //         let sample = (t * 1000.0 * 2.0 * std::f32::consts::PI).sin();
+            //         let amplitude = 0.8;
+            //         v.push_back(sample * amplitude);
+            //     }
+            // }
+            // queue.push(v);
             queue.push(VecDeque::new());
         }
         RenderQueue { queue }
@@ -67,7 +79,7 @@ pub fn render_thread_func(
         is_silence,
     };
 
-    println!("setup args. ");
+    println!("render: setup args");
 
     render(args)?;
     Ok(0)
@@ -87,6 +99,12 @@ fn render(args: Args) -> windows::Result<u8> {
     };
 
     let wfx = unsafe { audio_client.GetMixFormat()? };
+
+    unsafe { (*wfx).wFormatTag = WAVE_FORMAT_IEEE_FLOAT as u16 };
+    unsafe { (*wfx).cbSize = 0 };
+
+    let blockalign = unsafe { (*wfx).nBlockAlign };
+    let channel_count = unsafe { (*wfx).nChannels };
 
     unsafe {
         audio_client.Initialize(
@@ -151,28 +169,53 @@ fn render(args: Args) -> windows::Result<u8> {
         }
 
         let frames_of_padding = unsafe { audio_client.GetCurrentPadding()? };
+        let available_frames = frames_in_buffer - frames_of_padding;
 
-        if frames_of_padding == frames_in_buffer {
+        if available_frames == 0 {
             return Err(message_to_windows_error(&
                 "Got \"feed me\" event but IAudioClient::GetCurrentPadding reports buffer is full - glitch?"
             ));
         }
 
-        let mut data =
-            unsafe { audio_render_client.GetBuffer(frames_in_buffer - frames_of_padding)? };
+        let data = unsafe { audio_render_client.GetBuffer(available_frames)? };
 
         // TODO: data に値を入れる(float32)
-
-        // TODO: data に値を入れたら AUDCLNT_BUFFERFLAGS_SILENT を 0 にする
-        unsafe {
-            audio_render_client.ReleaseBuffer(
-                frames_in_buffer - frames_of_padding,
-                AUDCLNT_BUFFERFLAGS_SILENT,
-            )?
+        let mut q = args.queue.lock().unwrap();
+        let data_slice = unsafe {
+            std::slice::from_raw_parts_mut(
+                data,
+                (available_frames * (*wfx).nBlockAlign as u32) as usize,
+            )
         };
 
+        let mut is_exist_sample = false;
+        for frame in data_slice.chunks_exact_mut(blockalign as usize) {
+            for (channel_index, value) in frame
+                .chunks_exact_mut((blockalign / channel_count) as usize)
+                .enumerate()
+            {
+                let sample_option = q.read(channel_index);
+                if let Some(sample) = sample_option {
+                    let sample_bytes = sample.to_le_bytes();
+                    for (bufbyte, sinebyte) in value.iter_mut().zip(sample_bytes.iter()) {
+                        *bufbyte = *sinebyte;
+                    }
+                    is_exist_sample = true;
+                }
+            }
+        }
+
+        let flag = if !is_exist_sample || args.is_silence.load(SeqCst) {
+            AUDCLNT_BUFFERFLAGS_SILENT
+        } else {
+            0
+        };
+
+        // TODO: data に値を入れたら AUDCLNT_BUFFERFLAGS_SILENT を 0 にする
+        unsafe { audio_render_client.ReleaseBuffer(available_frames, flag)? };
+
         // main thread から stop event が来たかどうか
-        let is_stopped = args.is_stopped.load(std::sync::atomic::Ordering::SeqCst);
+        let is_stopped = args.is_stopped.load(SeqCst);
         if is_stopped {
             is_done = true;
         }
