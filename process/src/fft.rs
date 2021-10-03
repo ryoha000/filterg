@@ -61,7 +61,7 @@ pub fn fft_thread_func(queue: Arc<Mutex<FftQueue>>, is_stopped: Arc<AtomicBool>)
     }
 
     let mut q = queue.lock().unwrap();
-    let length = q.get_queue_min_size();
+    let length = q.get_queue_min_size().min(48000);
 
     let mut planner = FftPlanner::new();
     let fft = planner.plan_fft_forward(length);

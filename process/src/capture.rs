@@ -5,14 +5,13 @@ use super::utils::{AudioClientStopOnExit, CloseHandleOnExit, CoUninitializeOnExi
 use bindings::Windows::Win32::Media::Audio::CoreAudio::{
     IAudioCaptureClient, IAudioClient3, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
 };
+use bindings::Windows::Win32::Media::Multimedia::WAVE_FORMAT_IEEE_FLOAT;
 use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use bindings::Windows::Win32::System::Threading::{
     CreateWaitableTimerW, SetWaitableTimer, WaitForMultipleObjects, WAIT_OBJECT_0,
 };
 use bindings::Windows::Win32::{Foundation::HANDLE, Media::Audio::CoreAudio::IMMDevice};
 use hound::WavSpec;
-use std::ffi::OsStr;
-use std::os::windows::prelude::OsStrExt;
 use std::panic::panic_any;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
@@ -58,18 +57,15 @@ pub fn capture_thread_func(
     // args を作成。TODO: 入力を受け取るようにする
 
     let default_device = get_default_device()?;
-    println!("default_device.GetId(): {:#?}", unsafe {
-        default_device.GetId().unwrap()
-    });
 
     let args = Args {
         mm_device: default_device,
         is_stopped,
     };
 
-    println!("stup args. ");
+    println!("capture: setup args");
 
-    capture(tx, tx_wf, fft_queue, args)?;
+    capture(tx, tx_wf, fft_queue, args).unwrap();
     Ok(0)
 }
 
@@ -96,10 +92,9 @@ fn capture(
     println!("hns_default_device_period: {}", hns_default_device_period);
 
     let wfx = unsafe { audio_client.GetMixFormat()? };
-    println!("wfx.nAvgBytesPerSec: {:#?}", unsafe {
-        (*wfx).nAvgBytesPerSec
-    });
-    println!("wfx.nBlockAlign: {:#?}", unsafe { (*wfx).nBlockAlign });
+
+    unsafe { (*wfx).wFormatTag = WAVE_FORMAT_IEEE_FLOAT as u16 };
+    unsafe { (*wfx).cbSize = 0 };
 
     let block_align = unsafe { (*wfx).nBlockAlign };
     let n_channel = unsafe { (*wfx).nChannels };
@@ -187,7 +182,6 @@ fn capture(
     let mut arr: Vec<Vec<f32>> = vec![vec![], vec![]];
 
     let mut is_done = false;
-    let mut is_first_packet = true;
     let mut passes = 0;
     let mut frames: u64 = 0;
     while !is_done {
@@ -209,18 +203,6 @@ fn capture(
                     ptr::null_mut(),
                 )?
             }
-            // println!("flags: {}", flags);
-
-            // if is_first_packet && AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY == flags {
-            //     return Err(message_to_windows_error(
-            //         &"Probably spurious glitch reported on first packet",
-            //     ));
-            // } else if 0 != flags {
-            //     return Err(message_to_windows_error(&format!(
-            //         "IAudioCaptureClient::GetBuffer set flags to {} on pass {} after {} frames",
-            //         flags, passes, frames
-            //     )));
-            // }
 
             if 0 == num_frames_to_read {
                 return Err(message_to_windows_error(&format!("IAudioCaptureClient::GetBuffer said to read 0 frames on pass {} after {} frames", passes, frames)));
@@ -251,8 +233,6 @@ fn capture(
             unsafe {
                 audio_capture_client.ReleaseBuffer(num_frames_to_read)?;
             }
-
-            is_first_packet = false;
         }
 
         // timer をまつ
