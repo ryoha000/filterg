@@ -16,9 +16,8 @@ use std::{ptr, thread};
 
 use utils::{message_to_windows_error, CoUninitializeOnExit};
 
-use crate::fft::FftQueue;
-use crate::render::RenderQueue;
-use crate::utils::from_wide_ptr;
+use render::RenderQueue;
+use utils::from_wide_ptr;
 
 pub fn wmain() -> windows::Result<u8> {
     unsafe { CoInitializeEx(ptr::null_mut(), COINIT_MULTITHREADED)? };
@@ -28,24 +27,22 @@ pub fn wmain() -> windows::Result<u8> {
 }
 
 fn do_everything() -> windows::Result<u8> {
+    // capture スレッドの状態をやりとりするチャンネル
     let (tx, rx): (Sender<CaptureEvent>, Receiver<CaptureEvent>) = mpsc::channel();
+    // wave format をやりとりするチャンネル
     let (tx_wf, rx_wf): (Sender<WavSpec>, Receiver<WavSpec>) = mpsc::channel();
+    // capture したパケットをやりとりするチャンネル
+    let (tx_packet, rx_packet): (Sender<f32>, Receiver<f32>) = mpsc::channel();
 
-    let fft_queue = Arc::new(Mutex::new(FftQueue::new(0)));
-
-    let fft_queue_capture = fft_queue.clone();
     let is_stopped = Arc::new(AtomicBool::new(false));
     let is_stopped_capture = is_stopped.clone();
 
     // TODO: 入力を処理して渡すようにする
-    // TODO: fft_queue を渡す実装カスだから何とかする。チャンネルで sample をもらって queue に詰め替えるだけのスレッドがあると良い？
     let capture_thread = thread::spawn(move || {
-        capture::capture_thread_func(tx, tx_wf, is_stopped_capture, fft_queue_capture)
+        capture::capture_thread_func(tx, tx_wf, tx_packet, is_stopped_capture)
     });
 
-    let fft_queue_fft = fft_queue.clone();
-    let is_stopped_fft = is_stopped.clone();
-    let fft_thread = thread::spawn(move || fft::fft_thread_func(fft_queue_fft, is_stopped_fft));
+    let fft_thread = thread::spawn(move || fft::fft_thread_func(rx_packet).unwrap());
 
     // capture_thread の準備を待つ
     match rx.recv() {
@@ -80,7 +77,7 @@ fn do_everything() -> windows::Result<u8> {
         render::render_thread_func(render_queue, is_stopped_render, is_silence_clone)
     });
 
-    let sleep_time = std::time::Duration::from_secs(1);
+    let sleep_time = std::time::Duration::from_secs(10);
     thread::sleep(sleep_time);
 
     is_stopped.store(true, std::sync::atomic::Ordering::SeqCst);
