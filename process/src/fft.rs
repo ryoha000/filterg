@@ -1,10 +1,6 @@
-use std::{
-    collections::VecDeque,
-    sync::{atomic::AtomicBool, mpsc::Receiver, Arc},
-    thread, time,
-};
+use std::{collections::VecDeque, sync::{Arc, RwLock, atomic::AtomicBool, mpsc::{self, Receiver, Sender}}, thread, time};
 
-use rustfft::{num_complex::Complex32, FftPlanner};
+use rustfft::{Fft, FftPlanner, num_complex::Complex32};
 
 use plotters::prelude::*;
 
@@ -51,6 +47,18 @@ impl FftQueue {
         res
     }
 }
+
+enum ProcessEvent {
+    End
+}
+
+enum QueueingEvent {
+    Setup
+}
+
+const FS: usize = 48000;
+const WINDOW_SIZE: usize = FS / 1000 * 1000; // 1000ms
+const HOP_SIZE: usize = FS / 1000 * 1; // 1ms
 
 /// sender が drop されるまで終わらない
 pub fn fft_thread_func(receiver: Receiver<f32>) -> Result<(), Box<dyn std::error::Error>> {
@@ -112,17 +120,6 @@ fn queueing_from_recv(queue: &mut FftQueue, receiver: &Receiver<f32>, frame_coun
     return true;
 }
 
-pub fn aaa() {
-    let freq = 48000;
-    let window_size = freq / 1000 * 5; // 5ms
-    let hop_size = freq / 1000 * 1; // 1ms
-
-    let mut planner = FftPlanner::new();
-    let fft = planner.plan_fft_forward(1);
-    let mut buffer = vec![Complex32::new(0.0, 0.0); window_size];
-    fft.process(&mut buffer);
-}
-
 pub fn kakko_kari(pcms: Vec<Vec<f32>>) {
     let mut planner = FftPlanner::new();
     let fft = planner.plan_fft_forward(pcms[0].len());
@@ -175,4 +172,103 @@ fn plot(buffer: Vec<Complex32>, title_suffix: String) {
     // 折れ線グラフの定義＆描画
     let line_series = LineSeries::new(x_freq.iter().zip(y_db.iter()).map(|(x, y)| (*x, *y)), &RED);
     chart.draw_series(line_series).unwrap();
+}
+
+/// sender が drop されるまで終わらない
+pub fn fft_scheduler_thread_func(receiver: Receiver<f32>) -> Result<(), Box<dyn std::error::Error>> {
+    // TODO: WaveFormat を受け取る
+    let chan_count = 2;
+
+    let mut planner = FftPlanner::new();
+    let fft = planner.plan_fft_forward(WINDOW_SIZE);
+    let mut queue = Arc::new(RwLock::new(FftQueue::new(chan_count)));
+
+    let queueing_queue_clone = queue.clone();
+    let (tx_queueing, rx_queueing) = mpsc::channel::<QueueingEvent>();
+    // TODO: QueueingEvent の channel をわたす
+    thread::spawn(move || queueing_thread_func(queueing_queue_clone, receiver, tx_queueing));
+
+    // 実際にFFTを実行するスレッドを建てる
+    let (tx_process_event, rx_process_event) = mpsc::channel::<(i32, ProcessEvent)>();
+    let mut process_channels = Vec::new();
+    // TODO: CPU のコア数ぶんだけスレッドをたてるようにする
+    for id in 0..8 {
+        let queue_clone = queue.clone();
+        let fft_clone = fft.clone();
+        let tx_process_event_clone = tx_process_event.clone();
+
+        // (chan, index)をわたして、そのチャンネル、そのインデックスからの FFT を実行させる
+        let (tx_process_target, rx_process_target) = mpsc::channel::<(usize, usize)>();
+        process_channels.push(tx_process_target);
+
+        // TODO: CPU を割り当てる
+        thread::spawn(move || fft_process_thread_func(id, fft_clone, queue_clone, tx_process_event_clone, rx_process_target));
+    }
+
+    let mut next_index = 0;
+    if let Ok(QueueingEvent::Setup) = rx_queueing.recv() {
+        println!("fft: queueing setup");
+        
+    }
+
+
+
+    Ok(())
+}
+
+fn queueing_thread_func(queue: Arc<RwLock<FftQueue>>, rx: Receiver<f32>, tx: Sender<QueueingEvent>) {
+    let mut temp_queue = VecDeque::<f32>::new();
+    let mut is_initiallized = false;
+
+    for sample in rx {
+        temp_queue.push_back(sample);
+
+        // 初期化していないなら WINDOW_SIZE 分の長さで初期化する
+        if !is_initiallized {
+            if temp_queue.len() >= WINDOW_SIZE {
+                let mut q = queue.write().unwrap();
+                while let Some(sample) = temp_queue.pop_front() {
+                    q.push(sample);
+                }
+                is_initiallized = true;
+                tx.send(QueueingEvent::Setup).unwrap();
+            }
+        }
+
+        // 初期化済みなら HOP_SIZE を超えると毎回 push できないかチェックする
+        if is_initiallized {
+            if HOP_SIZE < temp_queue.len() {
+                if let Ok(mut q) = queue.try_write() {
+                    while let Some(sample) = temp_queue.pop_front() {
+                        q.push(sample);
+                    }
+                }
+            }
+        }
+    }
+    // capture_thread の tx が drop されると終了する
+}
+
+fn fft_process_thread_func(
+    id: i32,
+    planner: Arc<dyn Fft<f32>>,
+    queue: Arc<RwLock<FftQueue>>,
+    tx: Sender<(i32, ProcessEvent)>,
+    rx: Receiver<(usize, usize)>,
+) {
+    let mut buffer = vec![Complex32::new(0.0, 0.0); WINDOW_SIZE];
+
+    for (chan, index) in rx {
+        let q = queue.read().unwrap();
+        // q.set_buffer(&mut buffer, chan, index, WINDOW_SIZE);
+        // 明示的に read lock を外す
+        drop(q);
+
+        planner.process(&mut buffer);
+
+        // TODO: ここで FFT の結果に対する処理をする
+
+        tx.send((id, ProcessEvent::End)).unwrap();
+    }
+    // fft_thread の tx が drop されると終了する
 }
