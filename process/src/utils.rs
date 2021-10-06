@@ -84,4 +84,11 @@ pub fn to_wide_chars(s: &str) -> Vec<u16> {
         .collect::<Vec<_>>()
 }
 
+pub fn get_now_unix_time() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("back to the future")
+        .as_nanos()
+}
+
 pub const AUDCLNT_BUFFERFLAGS_SILENT: u32 = 2;

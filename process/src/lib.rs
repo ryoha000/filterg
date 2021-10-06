@@ -42,7 +42,9 @@ fn do_everything() -> windows::Result<u8> {
         capture::capture_thread_func(tx, tx_wf, tx_packet, is_stopped_capture)
     });
 
-    let fft_thread = thread::spawn(move || fft::fft_thread_func(rx_packet).unwrap());
+    let is_stopped_fft = is_stopped.clone();
+    let fft_thread =
+        thread::spawn(move || fft::fft_scheduler_thread_func(rx_packet, is_stopped_fft).unwrap());
 
     // capture_thread の準備を待つ
     match rx.recv() {
@@ -77,7 +79,7 @@ fn do_everything() -> windows::Result<u8> {
         render::render_thread_func(render_queue, is_stopped_render, is_silence_clone)
     });
 
-    let sleep_time = std::time::Duration::from_secs(10);
+    let sleep_time = std::time::Duration::from_secs(1);
     thread::sleep(sleep_time);
 
     is_stopped.store(true, std::sync::atomic::Ordering::SeqCst);

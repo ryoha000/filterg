@@ -1,11 +1,22 @@
-use std::{collections::VecDeque, sync::{Arc, RwLock, atomic::AtomicBool, mpsc::{self, Receiver, Sender}}, thread, time};
+use std::{
+    collections::VecDeque,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed},
+        mpsc::{channel, Receiver, RecvTimeoutError, Sender},
+        Arc, RwLock,
+    },
+    thread,
+};
 
-use rustfft::{Fft, FftPlanner, num_complex::Complex32};
+use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 
 use plotters::prelude::*;
 
+use super::utils::get_now_unix_time;
+
 pub struct FftQueue {
-    next_chan: usize,
+    pop_count: usize, // 累計の index でアクセスするため、いくつ pop したか記録しておく
+    next_chan: usize, // 次に push するときのチャンネルを持っておく
     queue: Vec<VecDeque<f32>>,
 }
 
@@ -18,6 +29,7 @@ impl FftQueue {
         FftQueue {
             queue,
             next_chan: 0,
+            pop_count: 0,
         }
     }
 
@@ -31,6 +43,7 @@ impl FftQueue {
     }
 
     pub fn read(&mut self, n_chan: usize) -> Option<f32> {
+        self.pop_count += 1;
         self.queue[n_chan].pop_front()
     }
 
@@ -38,104 +51,36 @@ impl FftQueue {
         self.queue.len()
     }
 
-    pub fn get_queue_min_size(&self) -> usize {
-        let length = self.queue.len();
-        let mut res: usize = usize::MAX;
-        for i in 0..length {
-            res = res.min(self.queue[i].len());
+    pub fn set_buffer(
+        &self,
+        buffer: &mut Vec<Complex32>,
+        chan: usize,
+        start_index: usize,
+        window_size: usize,
+    ) {
+        for i in 0..window_size {
+            buffer[i].re = self.queue[chan][i + start_index];
+            buffer[i].im = 0.0;
         }
-        res
     }
 }
 
 enum ProcessEvent {
-    End
+    End,
+    Exit,
 }
 
 enum QueueingEvent {
-    Setup
+    Setup,
+    Enqueue,
 }
 
 const FS: usize = 48000;
-const WINDOW_SIZE: usize = FS / 1000 * 1000; // 1000ms
+const WINDOW_SIZE: usize = FS / 1000 * 5; // 5ms
 const HOP_SIZE: usize = FS / 1000 * 1; // 1ms
 
-/// sender が drop されるまで終わらない
-pub fn fft_thread_func(receiver: Receiver<f32>) -> Result<(), Box<dyn std::error::Error>> {
-    let fs = 48000;
-    let target_freq = 10;
-    let chan_count = 2;
-
-    let mut planner = FftPlanner::new();
-    // TODO: WaveFormat を受け取る
-    let mut queue = FftQueue::new(chan_count);
-    let window_size = fs / 1000 * 1000; // 1000ms
-    let hop_size = fs / 1000 * 1; // 1ms
-
-    // 初回は window_size 分だけ queue につめる
-    let mut is_end = queueing_from_recv(&mut queue, &receiver, window_size);
-
-    while !is_end {
-        // ここでフーリエ変換
-
-        // hop_size 分だけ queue を詰め替え
-        is_end = queueing_from_recv(&mut queue, &receiver, hop_size);
-    }
-
-    let fft = planner.plan_fft_forward(window_size);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("back to the future")
-        .as_nanos();
-
-    for chan in 0..queue.get_n_chan() {
-        let mut buffer = Vec::<Complex32>::new();
-        for _ in 0..window_size {
-            buffer.push(Complex32::new(queue.read(chan).unwrap(), 0.0));
-        }
-        fft.process(&mut buffer);
-        plot(buffer, format!("chan-{}-{}", chan, now));
-    }
-
-    Ok(())
-}
-
-/// 返り値は sender が drop されたかどうか。既定の数だけ sample が送られるのを**待つ**
-fn queueing_from_recv(queue: &mut FftQueue, receiver: &Receiver<f32>, frame_count: usize) -> bool {
-    if frame_count == 0 {
-        return false;
-    }
-
-    let goal_count = frame_count * queue.get_n_chan();
-    let mut now_count = 0;
-
-    for sample in receiver {
-        queue.push(sample);
-        now_count += 1;
-        if now_count >= goal_count {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-pub fn kakko_kari(pcms: Vec<Vec<f32>>) {
-    let mut planner = FftPlanner::new();
-    let fft = planner.plan_fft_forward(pcms[0].len());
-    for (chan, pcm) in pcms.iter().enumerate() {
-        let mut buffer = pcm
-            .into_iter()
-            .map(move |v| Complex32::new(*v, 0.0))
-            .collect::<Vec<Complex32>>();
-        fft.process(&mut buffer);
-
-        plot(buffer, format!("{}", chan));
-    }
-}
-
 // debug 用の関数。plot-${chan}.png に fft の結果を plot する
-fn plot(buffer: Vec<Complex32>, title_suffix: String) {
+fn plot(buffer: &Vec<Complex32>, title_suffix: String) {
     let x_freq = (0..buffer.len()).collect::<Vec<usize>>();
     let y_db = buffer
         .iter()
@@ -175,22 +120,35 @@ fn plot(buffer: Vec<Complex32>, title_suffix: String) {
 }
 
 /// sender が drop されるまで終わらない
-pub fn fft_scheduler_thread_func(receiver: Receiver<f32>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn fft_scheduler_thread_func(
+    receiver: Receiver<f32>,
+    is_stopped: Arc<AtomicBool>,
+) -> Result<(), Box<dyn std::error::Error>> {
     // TODO: WaveFormat を受け取る
     let chan_count = 2;
 
     let mut planner = FftPlanner::new();
     let fft = planner.plan_fft_forward(WINDOW_SIZE);
-    let mut queue = Arc::new(RwLock::new(FftQueue::new(chan_count)));
+    let queue = Arc::new(RwLock::new(FftQueue::new(chan_count)));
 
+    let total_length = Arc::new(AtomicUsize::new(0));
+    let total_length_clone = total_length.clone();
     let queueing_queue_clone = queue.clone();
-    let (tx_queueing, rx_queueing) = mpsc::channel::<QueueingEvent>();
+    let (tx_queueing, rx_queueing) = channel::<QueueingEvent>();
     // TODO: QueueingEvent の channel をわたす
-    thread::spawn(move || queueing_thread_func(queueing_queue_clone, receiver, tx_queueing));
+    let queueing_thread = thread::spawn(move || {
+        queueing_thread_func(
+            queueing_queue_clone,
+            total_length_clone,
+            receiver,
+            tx_queueing,
+        )
+    });
 
     // 実際にFFTを実行するスレッドを建てる
-    let (tx_process_event, rx_process_event) = mpsc::channel::<(i32, ProcessEvent)>();
+    let (tx_process_event, rx_process_event) = channel::<(usize, ProcessEvent)>();
     let mut process_channels = Vec::new();
+    let mut process_threads = Vec::new();
     // TODO: CPU のコア数ぶんだけスレッドをたてるようにする
     for id in 0..8 {
         let queue_clone = queue.clone();
@@ -198,50 +156,97 @@ pub fn fft_scheduler_thread_func(receiver: Receiver<f32>) -> Result<(), Box<dyn 
         let tx_process_event_clone = tx_process_event.clone();
 
         // (chan, index)をわたして、そのチャンネル、そのインデックスからの FFT を実行させる
-        let (tx_process_target, rx_process_target) = mpsc::channel::<(usize, usize)>();
+        let (tx_process_target, rx_process_target) = channel::<(usize, usize)>();
         process_channels.push(tx_process_target);
 
         // TODO: CPU を割り当てる
-        thread::spawn(move || fft_process_thread_func(id, fft_clone, queue_clone, tx_process_event_clone, rx_process_target));
+        process_threads.push(thread::spawn(move || {
+            fft_process_thread_func(
+                id,
+                fft_clone,
+                queue_clone,
+                tx_process_event_clone,
+                rx_process_target,
+            )
+        }));
     }
 
+    let mut next_chan = 0;
     let mut next_index = 0;
-    if let Ok(QueueingEvent::Setup) = rx_queueing.recv() {
-        println!("fft: queueing setup");
-        
+    for (id, event) in rx_process_event {
+        if let ProcessEvent::End = event {
+            // もし len が window_size より大きいなら process を開始させる
+            if total_length.load(Relaxed) >= WINDOW_SIZE + next_index {
+                process_channels[id].send((next_chan, next_index)).unwrap();
+
+                next_chan += 1;
+                if next_chan >= chan_count {
+                    next_chan = 0;
+                    next_index += HOP_SIZE;
+                }
+            }
+        }
+        if is_stopped.load(Relaxed) {
+            println!("end. total_length: {}", total_length.load(Relaxed));
+
+            drop(tx_process_event);
+            for tx in process_channels {
+                drop(tx);
+            }
+            queueing_thread.join().unwrap();
+            for th in process_threads {
+                th.join().unwrap();
+            }
+            break;
+        }
     }
-
-
 
     Ok(())
 }
 
-fn queueing_thread_func(queue: Arc<RwLock<FftQueue>>, rx: Receiver<f32>, tx: Sender<QueueingEvent>) {
+fn queueing_thread_func(
+    queue: Arc<RwLock<FftQueue>>,
+    total_length: Arc<AtomicUsize>,
+    rx: Receiver<f32>,
+    tx: Sender<QueueingEvent>,
+) {
     let mut temp_queue = VecDeque::<f32>::new();
     let mut is_initiallized = false;
+    // TODO: ちゃんとする
+    let chan_size = 2;
+
+    println!("WINDOW_SIZE * chan_size: {}", WINDOW_SIZE * chan_size);
 
     for sample in rx {
         temp_queue.push_back(sample);
 
         // 初期化していないなら WINDOW_SIZE 分の長さで初期化する
         if !is_initiallized {
-            if temp_queue.len() >= WINDOW_SIZE {
+            if temp_queue.len() >= WINDOW_SIZE * chan_size {
+                println!("want to get queue lock");
                 let mut q = queue.write().unwrap();
+                let enqueue_size = temp_queue.len() / chan_size;
                 while let Some(sample) = temp_queue.pop_front() {
                     q.push(sample);
                 }
                 is_initiallized = true;
+
+                total_length.fetch_add(enqueue_size, Relaxed);
                 tx.send(QueueingEvent::Setup).unwrap();
             }
         }
 
         // 初期化済みなら HOP_SIZE を超えると毎回 push できないかチェックする
         if is_initiallized {
-            if HOP_SIZE < temp_queue.len() {
+            if temp_queue.len() > HOP_SIZE * chan_size {
                 if let Ok(mut q) = queue.try_write() {
+                    let enqueue_size = temp_queue.len() / chan_size;
                     while let Some(sample) = temp_queue.pop_front() {
                         q.push(sample);
                     }
+
+                    total_length.fetch_add(enqueue_size, Relaxed);
+                    tx.send(QueueingEvent::Enqueue).unwrap();
                 }
             }
         }
@@ -250,25 +255,74 @@ fn queueing_thread_func(queue: Arc<RwLock<FftQueue>>, rx: Receiver<f32>, tx: Sen
 }
 
 fn fft_process_thread_func(
-    id: i32,
+    id: usize,
     planner: Arc<dyn Fft<f32>>,
     queue: Arc<RwLock<FftQueue>>,
-    tx: Sender<(i32, ProcessEvent)>,
+    tx: Sender<(usize, ProcessEvent)>,
     rx: Receiver<(usize, usize)>,
 ) {
     let mut buffer = vec![Complex32::new(0.0, 0.0); WINDOW_SIZE];
 
-    for (chan, index) in rx {
-        let q = queue.read().unwrap();
-        // q.set_buffer(&mut buffer, chan, index, WINDOW_SIZE);
-        // 明示的に read lock を外す
-        drop(q);
+    let mut lock_time = Vec::new();
+    let mut fft_time = Vec::new();
+    let mut plot_time = Vec::new();
 
-        planner.process(&mut buffer);
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(1)) {
+            Ok((chan, index)) => {
+                let start = get_now_unix_time();
 
-        // TODO: ここで FFT の結果に対する処理をする
+                let q = queue.read().unwrap();
 
-        tx.send((id, ProcessEvent::End)).unwrap();
+                lock_time.push(get_now_unix_time() - start);
+
+                let start = get_now_unix_time();
+                q.set_buffer(&mut buffer, chan, index, WINDOW_SIZE);
+                // 明示的に read lock を外す
+                drop(q);
+
+                planner.process(&mut buffer);
+
+                fft_time.push(get_now_unix_time() - start);
+
+                // let start = get_now_unix_time();
+
+                // // TODO: ここで FFT の結果に対する処理をする
+                // plot(&buffer, format!("{}-{}", chan, index));
+
+                // plot_time.push(get_now_unix_time() - start);
+
+                tx.send((id, ProcessEvent::End)).unwrap();
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                tx.send((id, ProcessEvent::End)).unwrap();
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                break;
+            }
+        }
     }
+    println!(
+        "thread id: {}, lock_time avg: {}, fft_time avg: {}, plot_time avg: {}",
+        id,
+        lock_time.iter().sum::<u128>()
+            / if lock_time.len() == 0 {
+                1
+            } else {
+                lock_time.len() as u128
+            },
+        fft_time.iter().sum::<u128>()
+            / if fft_time.len() == 0 {
+                1
+            } else {
+                fft_time.len() as u128
+            },
+        plot_time.iter().sum::<u128>()
+            / if plot_time.len() == 0 {
+                1
+            } else {
+                plot_time.len() as u128
+            },
+    )
     // fft_thread の tx が drop されると終了する
 }
