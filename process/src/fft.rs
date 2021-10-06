@@ -303,26 +303,29 @@ fn fft_process_thread_func(
         }
     }
     println!(
-        "thread id: {}, lock_time avg: {}, fft_time avg: {}, plot_time avg: {}",
+        "thread_id: {}, lock_time avg: {1: >2}μs, fft_time avg: {2: >3}μs, plot_time avg: {3: >2}μs",
         id,
         lock_time.iter().sum::<u128>()
             / if lock_time.len() == 0 {
                 1
             } else {
                 lock_time.len() as u128
-            },
+            }
+            / 1000,
         fft_time.iter().sum::<u128>()
             / if fft_time.len() == 0 {
                 1
             } else {
                 fft_time.len() as u128
-            },
+            }
+            / 1000,
         plot_time.iter().sum::<u128>()
             / if plot_time.len() == 0 {
                 1
             } else {
                 plot_time.len() as u128
-            },
+            }
+            / 1000,
     )
     // fft_thread の tx が drop されると終了する
 }
