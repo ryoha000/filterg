@@ -12,6 +12,8 @@ use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 
 use plotters::prelude::*;
 
+use crate::utils::{HOP_SIZE, WINDOW_SIZE};
+
 use super::utils::get_now_unix_time;
 
 pub struct FftQueue {
@@ -74,10 +76,6 @@ enum QueueingEvent {
     Setup,
     Enqueue,
 }
-
-const FS: usize = 48000;
-const WINDOW_SIZE: usize = FS / 1000 * 5; // 5ms
-const HOP_SIZE: usize = FS / 1000 * 1; // 1ms
 
 // debug 用の関数。plot-${chan}.png に fft の結果を plot する
 fn plot(buffer: &Vec<Complex32>, title_suffix: String) {

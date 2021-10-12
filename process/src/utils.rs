@@ -92,3 +92,9 @@ pub fn get_now_unix_time() -> u128 {
 }
 
 pub const AUDCLNT_BUFFERFLAGS_SILENT: u32 = 2;
+
+pub const FS: usize = 48000;
+pub const WINDOW_SIZE: usize = FS / 1000 * 5; // 5ms
+pub const HOP_SIZE: usize = FS / 1000 * 1; // 1ms
+pub const MIN_TAEGET_FREQ: usize = 980;
+pub const MAX_TAEGET_FREQ: usize = 1020;
