@@ -12,7 +12,7 @@ use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 
 use plotters::prelude::*;
 
-use crate::utils::{HOP_SIZE, WINDOW_SIZE};
+use crate::utils::{HOP_SIZE, MAX_TARGET_FREQ_INDEX, MIN_TARGET_FREQ_INDEX, WINDOW_SIZE};
 
 use super::utils::get_now_unix_time;
 
@@ -120,6 +120,7 @@ fn plot(buffer: &Vec<Complex32>, title_suffix: String) {
 /// sender が drop されるまで終わらない
 pub fn fft_scheduler_thread_func(
     receiver: Receiver<f32>,
+    sender: Sender<(usize, usize, Vec<Complex32>)>,
     is_stopped: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // TODO: WaveFormat を受け取る
@@ -157,6 +158,8 @@ pub fn fft_scheduler_thread_func(
         let (tx_process_target, rx_process_target) = channel::<(usize, usize)>();
         process_channels.push(tx_process_target);
 
+        let sender_clone = sender.clone();
+
         // TODO: CPU を割り当てる
         process_threads.push(thread::spawn(move || {
             fft_process_thread_func(
@@ -164,6 +167,7 @@ pub fn fft_scheduler_thread_func(
                 fft_clone,
                 queue_clone,
                 tx_process_event_clone,
+                sender_clone,
                 rx_process_target,
             )
         }));
@@ -213,8 +217,6 @@ fn queueing_thread_func(
     // TODO: ちゃんとする
     let chan_size = 2;
 
-    println!("WINDOW_SIZE * chan_size: {}", WINDOW_SIZE * chan_size);
-
     for sample in rx {
         temp_queue.push_back(sample);
 
@@ -257,6 +259,7 @@ fn fft_process_thread_func(
     planner: Arc<dyn Fft<f32>>,
     queue: Arc<RwLock<FftQueue>>,
     tx: Sender<(usize, ProcessEvent)>,
+    result_sender: Sender<(usize, usize, Vec<Complex32>)>,
     rx: Receiver<(usize, usize)>,
 ) {
     let mut buffer = vec![Complex32::new(0.0, 0.0); WINDOW_SIZE];
@@ -286,6 +289,11 @@ fn fft_process_thread_func(
                 // let start = get_now_unix_time();
 
                 // // TODO: ここで FFT の結果に対する処理をする
+                let mut send_vec = vec![];
+                for i in MIN_TARGET_FREQ_INDEX..MAX_TARGET_FREQ_INDEX + 1 {
+                    send_vec.push(buffer[i].clone());
+                }
+                result_sender.send((chan, index, send_vec));
                 // plot(&buffer, format!("{}-{}", chan, index));
 
                 // plot_time.push(get_now_unix_time() - start);
