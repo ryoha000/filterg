@@ -11,7 +11,6 @@ use hound::WavSpec;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
-use std::thread::JoinHandle;
 use std::{ptr, thread};
 
 use utils::{message_to_windows_error, CoUninitializeOnExit};
@@ -98,28 +97,4 @@ pub fn print_device_list() -> windows::Result<u8> {
     let d = device::get_default_device()?;
     println!("{:#?}", from_wide_ptr(unsafe { d.GetId()?.0 }));
     return device::get_list_devices();
-}
-
-pub fn test_thread() -> windows::Result<u8> {
-    let (tx, rx): (Sender<u8>, Receiver<u8>) = mpsc::channel();
-
-    let threads = (0..5)
-        .map(|i| {
-            let tx_c = tx.clone();
-            thread::spawn(move || {
-                for vv in 0..5 {
-                    tx_c.send(vv + 5 * i).unwrap();
-                    println!("send thread: {}, vv: {}", i, vv);
-                }
-                0
-            })
-        })
-        .collect::<Vec<JoinHandle<_>>>();
-
-    let _ = threads.into_iter().map(|j| j.join().unwrap());
-
-    for r in rx {
-        println!("receie: {}", r)
-    }
-    Ok(0)
 }
