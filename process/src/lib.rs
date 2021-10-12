@@ -4,14 +4,15 @@ mod event;
 mod fft;
 mod render;
 mod utils;
+mod render_prepare;
 
 use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use capture::CaptureEvent;
 use hound::WavSpec;
+use rustfft::num_complex::Complex32;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{mpsc, Arc, Mutex};
-use std::thread::JoinHandle;
 use std::{ptr, thread};
 
 use utils::{message_to_windows_error, CoUninitializeOnExit};
@@ -33,6 +34,8 @@ fn do_everything() -> windows::Result<u8> {
     let (tx_wf, rx_wf): (Sender<WavSpec>, Receiver<WavSpec>) = mpsc::channel();
     // capture したパケットをやりとりするチャンネル
     let (tx_packet, rx_packet): (Sender<f32>, Receiver<f32>) = mpsc::channel();
+    // fft した結果をやりとりするチャンネル
+    let (tx_fft, rx_fft) = mpsc::channel::<(usize, usize, Vec<Complex32>)>();
 
     let is_stopped = Arc::new(AtomicBool::new(false));
     let is_stopped_capture = is_stopped.clone();
@@ -44,7 +47,7 @@ fn do_everything() -> windows::Result<u8> {
 
     let is_stopped_fft = is_stopped.clone();
     let fft_thread =
-        thread::spawn(move || fft::fft_scheduler_thread_func(rx_packet, is_stopped_fft).unwrap());
+        thread::spawn(move || fft::fft_scheduler_thread_func(rx_packet, tx_fft, is_stopped_fft).unwrap());
 
     // capture_thread の準備を待つ
     match rx.recv() {
@@ -71,12 +74,17 @@ fn do_everything() -> windows::Result<u8> {
     }
 
     let render_queue = Arc::new(Mutex::new(RenderQueue::new(wf.channels)));
+    let prepare_render_queue = render_queue.clone();
     let is_stopped_render = is_stopped.clone();
     let is_silence = Arc::new(AtomicBool::new(false));
     let is_silence_clone = is_silence.clone();
 
     let render_thread = thread::spawn(move || {
         render::render_thread_func(render_queue, is_stopped_render, is_silence_clone)
+    });
+
+    let render_prepare_thread = thread::spawn(move || {
+        render_prepare::render_prepare_thread_func(rx_fft, prepare_render_queue)
     });
 
     let sleep_time = std::time::Duration::from_secs(1);
@@ -98,28 +106,4 @@ pub fn print_device_list() -> windows::Result<u8> {
     let d = device::get_default_device()?;
     println!("{:#?}", from_wide_ptr(unsafe { d.GetId()?.0 }));
     return device::get_list_devices();
-}
-
-pub fn test_thread() -> windows::Result<u8> {
-    let (tx, rx): (Sender<u8>, Receiver<u8>) = mpsc::channel();
-
-    let threads = (0..5)
-        .map(|i| {
-            let tx_c = tx.clone();
-            thread::spawn(move || {
-                for vv in 0..5 {
-                    tx_c.send(vv + 5 * i).unwrap();
-                    println!("send thread: {}, vv: {}", i, vv);
-                }
-                0
-            })
-        })
-        .collect::<Vec<JoinHandle<_>>>();
-
-    let _ = threads.into_iter().map(|j| j.join().unwrap());
-
-    for r in rx {
-        println!("receie: {}", r)
-    }
-    Ok(0)
 }
