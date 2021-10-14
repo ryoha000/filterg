@@ -3,8 +3,8 @@ mod device;
 mod event;
 mod fft;
 mod render;
-mod utils;
 mod render_prepare;
+mod utils;
 
 use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use capture::CaptureEvent;
@@ -46,8 +46,9 @@ fn do_everything() -> windows::Result<u8> {
     });
 
     let is_stopped_fft = is_stopped.clone();
-    let fft_thread =
-        thread::spawn(move || fft::fft_scheduler_thread_func(rx_packet, tx_fft, is_stopped_fft).unwrap());
+    let fft_thread = thread::spawn(move || {
+        fft::fft_scheduler_thread_func(rx_packet, tx_fft, is_stopped_fft).unwrap()
+    });
 
     // capture_thread の準備を待つ
     match rx.recv() {
@@ -87,7 +88,7 @@ fn do_everything() -> windows::Result<u8> {
         render_prepare::render_prepare_thread_func(rx_fft, prepare_render_queue)
     });
 
-    let sleep_time = std::time::Duration::from_secs(1);
+    let sleep_time = std::time::Duration::from_secs(10);
     thread::sleep(sleep_time);
 
     is_stopped.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -95,6 +96,7 @@ fn do_everything() -> windows::Result<u8> {
     capture_thread.join().unwrap()?;
     render_thread.join().unwrap()?;
     fft_thread.join().unwrap();
+    render_prepare_thread.join().unwrap();
 
     Ok(0)
 }

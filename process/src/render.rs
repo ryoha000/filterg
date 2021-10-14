@@ -172,9 +172,11 @@ fn render(args: Args) -> windows::Result<u8> {
         let available_frames = frames_in_buffer - frames_of_padding;
 
         if available_frames == 0 {
-            return Err(message_to_windows_error(&
-                "Got \"feed me\" event but IAudioClient::GetCurrentPadding reports buffer is full - glitch?"
-            ));
+            println!("[ERROR?] Got \"feed me\" event but IAudioClient::GetCurrentPadding reports buffer is full - glitch?");
+            continue;
+            // return Err(message_to_windows_error(&
+            //     "Got \"feed me\" event but IAudioClient::GetCurrentPadding reports buffer is full - glitch?"
+            // ));
         }
 
         let data = unsafe { audio_render_client.GetBuffer(available_frames)? };

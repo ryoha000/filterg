@@ -91,13 +91,20 @@ pub fn get_now_unix_time() -> u128 {
         .as_nanos()
 }
 
+pub fn get_now_milli_unix_time() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("back to the future")
+        .as_millis()
+}
+
 pub const AUDCLNT_BUFFERFLAGS_SILENT: u32 = 2;
 
 pub const FS: usize = 48000;
-const DIV_NUM: usize = 1000 * 5;
+const DIV_NUM: usize = 1000 / 5;
 pub const WINDOW_SIZE: usize = FS / DIV_NUM; // 5ms
 pub const HOP_SIZE: usize = FS / 1000 * 1; // 1ms
-pub const MIN_TAEGET_FREQ: usize = 980;
+pub const MIN_TAEGET_FREQ: usize = 1000;
 pub const MAX_TAEGET_FREQ: usize = 1020;
-pub const MIN_TARGET_FREQ_INDEX: usize = (MIN_TAEGET_FREQ as f32 * DIV_NUM as f32) as usize;
-pub const MAX_TARGET_FREQ_INDEX: usize = (MAX_TAEGET_FREQ as f32 * DIV_NUM as f32) as usize;
+pub const MIN_TARGET_FREQ_INDEX: usize = (MIN_TAEGET_FREQ as f32 / DIV_NUM as f32) as usize;
+pub const MAX_TARGET_FREQ_INDEX: usize = (MAX_TAEGET_FREQ as f32 / DIV_NUM as f32) as usize;
