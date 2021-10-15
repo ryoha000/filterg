@@ -35,7 +35,7 @@ fn do_everything() -> windows::Result<u8> {
     // capture したパケットをやりとりするチャンネル
     let (tx_packet, rx_packet): (Sender<f32>, Receiver<f32>) = mpsc::channel();
     // fft した結果をやりとりするチャンネル
-    let (tx_fft, rx_fft) = mpsc::channel::<(usize, usize, Vec<Complex32>)>();
+    let (tx_fft, rx_fft) = mpsc::channel::<(usize, usize, Complex32)>();
 
     let is_stopped = Arc::new(AtomicBool::new(false));
     let is_stopped_capture = is_stopped.clone();

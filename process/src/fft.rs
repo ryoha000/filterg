@@ -12,7 +12,7 @@ use rustfft::{num_complex::Complex32, Fft, FftPlanner};
 
 use plotters::prelude::*;
 
-use crate::utils::{HOP_SIZE, MAX_TARGET_FREQ_INDEX, MIN_TARGET_FREQ_INDEX, WINDOW_SIZE};
+use super::utils::{HOP_SIZE, TARGET_FREQ_INDEX, WINDOW_SIZE};
 
 use super::utils::get_now_unix_time;
 
@@ -120,7 +120,7 @@ fn plot(buffer: &Vec<Complex32>, title_suffix: String) {
 /// sender が drop されるまで終わらない
 pub fn fft_scheduler_thread_func(
     receiver: Receiver<f32>,
-    sender: Sender<(usize, usize, Vec<Complex32>)>,
+    sender: Sender<(usize, usize, Complex32)>,
     is_stopped: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // TODO: WaveFormat を受け取る
@@ -259,7 +259,7 @@ fn fft_process_thread_func(
     planner: Arc<dyn Fft<f32>>,
     queue: Arc<RwLock<FftQueue>>,
     tx: Sender<(usize, ProcessEvent)>,
-    result_sender: Sender<(usize, usize, Vec<Complex32>)>,
+    result_sender: Sender<(usize, usize, Complex32)>,
     rx: Receiver<(usize, usize)>,
 ) {
     let mut buffer = vec![Complex32::new(0.0, 0.0); WINDOW_SIZE];
@@ -289,11 +289,7 @@ fn fft_process_thread_func(
                 // let start = get_now_unix_time();
 
                 // // TODO: ここで FFT の結果に対する処理をする
-                let mut send_vec = vec![];
-                for i in MIN_TARGET_FREQ_INDEX..MAX_TARGET_FREQ_INDEX + 1 {
-                    send_vec.push(buffer[i].clone());
-                }
-                result_sender.send((chan, index, send_vec));
+                result_sender.send((chan, index, buffer[TARGET_FREQ_INDEX].clone()));
                 // plot(&buffer, format!("{}-{}", chan, index));
 
                 // plot_time.push(get_now_unix_time() - start);

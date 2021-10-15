@@ -3,10 +3,10 @@ use rustfft::{num_complex::Complex32, FftPlanner};
 use std::sync::{mpsc::Receiver, Arc, Mutex};
 
 use super::render::RenderQueue;
-use super::utils::{MAX_TARGET_FREQ_INDEX, MIN_TARGET_FREQ_INDEX, WINDOW_SIZE};
+use super::utils::{TARGET_FREQ_INDEX, WINDOW_SIZE};
 
 pub fn render_prepare_thread_func(
-    fft_receiver: Receiver<(usize, usize, Vec<Complex32>)>,
+    fft_receiver: Receiver<(usize, usize, Complex32)>,
     render_queue: Arc<Mutex<RenderQueue>>,
 ) {
     let mut last_ifft_index = 0;
@@ -31,22 +31,12 @@ pub fn render_prepare_thread_func(
         last_ifft_index = index;
         count.1 += 1;
 
-        if fft_result.len() != MAX_TARGET_FREQ_INDEX - MIN_TARGET_FREQ_INDEX + 1 {
-            panic!(
-                "not match fft_result len!!! expected: {}, actual: {}",
-                MAX_TARGET_FREQ_INDEX - MIN_TARGET_FREQ_INDEX + 1,
-                fft_result.len()
-            );
-        }
-
-        for (i, result) in fft_result.iter().enumerate() {
-            let angle = result.arg() + std::f32::consts::PI;
-            let set_complex = result * Complex32::new(f32::cos(angle), f32::sin(angle));
-            // TODO: ここで位相をずらす
-            buffer[i + MIN_TARGET_FREQ_INDEX].re = set_complex.re;
-            buffer[i + MIN_TARGET_FREQ_INDEX].im = set_complex.im;
-        }
-        logvec.push(fft_result[0].norm());
+        let angle = fft_result.arg() + std::f32::consts::PI;
+        let set_complex = fft_result * Complex32::new(f32::cos(angle), f32::sin(angle));
+        // TODO: ここで位相をずらす
+        buffer[TARGET_FREQ_INDEX].re = set_complex.re;
+        buffer[TARGET_FREQ_INDEX].im = set_complex.im;
+        logvec.push(fft_result.norm());
 
         planner.process(&mut buffer);
         render_queue.lock().unwrap().push(chan, &buffer);
