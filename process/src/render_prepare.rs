@@ -1,51 +1,80 @@
 use plotters::prelude::*;
-use rustfft::{num_complex::Complex32, FftPlanner};
+use rustfft::{num_complex::Complex32};
 use std::sync::{mpsc::Receiver, Arc, Mutex};
 
 use super::render::RenderQueue;
-use super::utils::{TARGET_FREQ_INDEX, WINDOW_SIZE};
+use super::utils::{WINDOW_SIZE, WINDOW_SIZE_MILLI_SECOND, get_now_milli_unix_time};
 
 pub fn render_prepare_thread_func(
     fft_receiver: Receiver<(usize, usize, Complex32)>,
     render_queue: Arc<Mutex<RenderQueue>>,
 ) {
-    let mut last_ifft_index = 0;
-    let mut buffer = vec![Complex32::new(0.0, 0.0); WINDOW_SIZE];
+    let mut last_check_index = 0;
 
-    let mut fft = FftPlanner::new();
-    let planner = fft.plan_fft_inverse(WINDOW_SIZE);
+    let mut last_update_milli_second = 0;
+    let buffer_milli_second = 1;
+    let mut amplitude = 0.0;
+    let mut angle = 0.0;
 
-    let mut amplitudes = vec![0.0; WINDOW_SIZE];
-    let mut angles = vec![0.0; WINDOW_SIZE];
-
-    let mut logvec = vec![];
+    // TODO: log 用、消す
+    let mut log_amplitude_diff_vec = vec![];
+    let mut log_angle_diff_vec = vec![];
+    let mut log_original_amplitude_vec = vec![];
     let mut count = (0, 0);
 
     for (chan, index, fft_result) in fft_receiver {
         count.0 += 1;
         // TODO: 何らかの方法で iFFT するかどうか決めて、しないなら continue
         // 今は全てiFFTしてる
-        if last_ifft_index != 0 && index != WINDOW_SIZE + last_ifft_index {
+        if last_check_index != 0 && index != WINDOW_SIZE + last_check_index {
             continue;
         }
-        last_ifft_index = index;
+        last_check_index = index;
         count.1 += 1;
 
-        let angle = fft_result.arg() + std::f32::consts::PI;
-        let set_complex = fft_result * Complex32::new(f32::cos(angle), f32::sin(angle));
-        // TODO: ここで位相をずらす
-        buffer[TARGET_FREQ_INDEX].re = set_complex.re;
-        buffer[TARGET_FREQ_INDEX].im = set_complex.im;
-        logvec.push(fft_result.norm());
+        let now = get_now_milli_unix_time();
+        if now <= buffer_milli_second + WINDOW_SIZE_MILLI_SECOND as u128 + last_update_milli_second {
+            // 出してるつもりの音か分からないため continue
+            continue;
+        }
 
-        planner.process(&mut buffer);
-        render_queue.lock().unwrap().push(chan, &buffer);
+        // 位相と振幅のずれを検出
+        let (original_amplitude, original_angle) = diff(&fft_result, amplitude, angle);
+        
+        // TODO: 消す
+        log_amplitude_diff_vec.push(original_amplitude - amplitude);
+        log_angle_diff_vec.push(angle - original_angle);
+        log_original_amplitude_vec.push(original_amplitude);
+
+        amplitude = original_amplitude;
+        let angle_diff = angle - original_angle;
+        // angle は pi だけ位相が違うようにフィードバック制御したい
+        angle += std::f32::consts::PI - angle_diff;
+
+
+        render_queue.lock().unwrap().update(chan, amplitude, angle);
+        last_update_milli_second = now;
     }
     println!("render_prepare: count: {:#?}", &count);
-    plot(&logvec, "amplitude".to_string());
+    plot(&log_amplitude_diff_vec, "log_amplitude_diff_vec".to_string());
+    plot(&log_angle_diff_vec, "log_angle_diff_vec".to_string());
+    plot(&log_original_amplitude_vec, "log_original_amplitude_vec".to_string());
 }
 
-// debug 用の関数。plot-${chan}.png に fft の結果を plot する
+/// 合成後の複素数と自分が加えた振幅、位相を受け取って元の振幅、位相を取得
+fn diff(result: &Complex32, add_amplitude: f32, add_angle: f32) -> (f32, f32) {
+    let result_amplitude = result.norm();
+    let result_angle = result.arg();
+
+    // https://detail.chiebukuro.yahoo.co.jp/qa/question_detail/q13190344118 (自分でも導出済み)
+    let sin_diff = result_amplitude * result_angle.sin() - add_amplitude * add_angle.sin();
+    let cos_diff = result_amplitude * result_angle.cos() - add_amplitude * add_angle.cos();
+    let original_amplitude = (sin_diff.powi(2) + cos_diff.powi(2)).powf(0.5);
+    let original_angle = (sin_diff / cos_diff).atan();
+
+    (original_amplitude, original_angle)
+}
+
 fn plot(buffer: &Vec<f32>, title_suffix: String) {
     let x_freq = (0..buffer.len()).collect::<Vec<usize>>();
     let y_db = buffer.iter().map(|v| *v).collect::<Vec<f32>>();

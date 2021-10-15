@@ -26,8 +26,39 @@ struct Args {
     is_silence: Arc<AtomicBool>,
 }
 
+struct CosGenerator {
+    time: f64,
+    freq: f64,
+    delta_t: f64,
+    amplitude: f64,
+    angle: f64
+}
+
+impl CosGenerator {
+    fn new(freq: f64, fs: f64, amplitude: f64, angle: f64) -> Self {
+        CosGenerator {
+            time: 0.0,
+            freq,
+            delta_t: 1.0 / fs,
+            amplitude,
+            angle
+        }
+    }
+    fn next(&mut self) -> f32 {
+        let output = ((self.freq * self.time * std::f64::consts::PI * 2. + self.angle).cos() * self.amplitude) as f32;
+        self.time += self.delta_t;
+        output
+    }
+    fn update(&mut self, amplitude: f64, angle: f64) {
+        self.time = 0.0;
+        self.amplitude = amplitude;
+        self.angle = angle;
+    }
+}
+
 pub struct RenderQueue {
     queue: Vec<VecDeque<f32>>,
+    generators: Vec<CosGenerator>
 }
 
 impl RenderQueue {
@@ -46,7 +77,22 @@ impl RenderQueue {
             // queue.push(v);
             queue.push(VecDeque::new());
         }
-        RenderQueue { queue }
+        let mut generators = Vec::new();
+        for _ in 0..n_chan {
+            generators.push(CosGenerator::new(1.0, 44100.0, 0.0, 0.0));
+        }
+        RenderQueue {
+            queue,
+            generators,
+        }
+    }
+
+    pub fn next(&mut self, n_chan: usize) -> f32 {
+        self.generators[n_chan].next()
+    }
+
+    pub fn update(&mut self, n_chan: usize, amplitude: f32, angle: f32) {
+        self.generators[n_chan].update(amplitude as f64, angle as f64)
     }
 
     pub fn push(&mut self, n_chan: usize, pcm: &[Complex32]) {
@@ -199,8 +245,8 @@ fn render(args: Args) -> windows::Result<u8> {
                 let sample_option = q.read(channel_index);
                 if let Some(sample) = sample_option {
                     let sample_bytes = sample.to_le_bytes();
-                    for (bufbyte, sinebyte) in value.iter_mut().zip(sample_bytes.iter()) {
-                        *bufbyte = *sinebyte;
+                    for (bufbyte, Cosbyte) in value.iter_mut().zip(sample_bytes.iter()) {
+                        *bufbyte = *Cosbyte;
                     }
                     is_exist_sample = true;
                 }

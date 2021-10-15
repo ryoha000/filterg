@@ -101,7 +101,8 @@ pub fn get_now_milli_unix_time() -> u128 {
 pub const AUDCLNT_BUFFERFLAGS_SILENT: u32 = 2;
 
 pub const FS: usize = 48000;
-const DIV_NUM: usize = 1000 / 5;
+pub const WINDOW_SIZE_MILLI_SECOND: usize = 5;
+const DIV_NUM: usize = 1000 / WINDOW_SIZE_MILLI_SECOND;
 pub const WINDOW_SIZE: usize = FS / DIV_NUM; // 5ms
 pub const HOP_SIZE: usize = FS / 1000 * 1; // 1ms
 pub const TAEGET_FREQ: usize = 1000;
