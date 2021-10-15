@@ -11,8 +11,6 @@ use bindings::Windows::Win32::Media::Audio::CoreAudio::{
 use bindings::Windows::Win32::Media::Multimedia::WAVE_FORMAT_IEEE_FLOAT;
 use bindings::Windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use bindings::Windows::Win32::System::Threading::{WaitForMultipleObjects, WAIT_OBJECT_0};
-use rustfft::num_complex::Complex32;
-use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, Mutex};
@@ -57,32 +55,16 @@ impl CosGenerator {
 }
 
 pub struct RenderQueue {
-    queue: Vec<VecDeque<f32>>,
     generators: Vec<CosGenerator>
 }
 
 impl RenderQueue {
     pub fn new(n_chan: u16) -> RenderQueue {
-        let mut queue = Vec::new();
-        for _ in 0..n_chan {
-            // ↓は10Hzの音を再生するサンプル
-            // let mut v = VecDeque::new();
-            // for _ in 0..3 {
-            //     for t in (0..48000).map(|x| x as f32 / 48000.0) {
-            //         let sample = (t * 1000.0 * 2.0 * std::f32::consts::PI).sin();
-            //         let amplitude = 0.8;
-            //         v.push_back(sample * amplitude);
-            //     }
-            // }
-            // queue.push(v);
-            queue.push(VecDeque::new());
-        }
         let mut generators = Vec::new();
         for _ in 0..n_chan {
             generators.push(CosGenerator::new(1.0, 44100.0, 0.0, 0.0));
         }
         RenderQueue {
-            queue,
             generators,
         }
     }
@@ -93,16 +75,6 @@ impl RenderQueue {
 
     pub fn update(&mut self, n_chan: usize, amplitude: f32, angle: f32) {
         self.generators[n_chan].update(amplitude as f64, angle as f64)
-    }
-
-    pub fn push(&mut self, n_chan: usize, pcm: &[Complex32]) {
-        for sample in pcm {
-            self.queue[n_chan].push_back(sample.re);
-        }
-    }
-
-    pub fn read(&mut self, n_chan: usize) -> Option<f32> {
-        self.queue[n_chan].pop_front()
     }
 }
 
@@ -242,14 +214,12 @@ fn render(args: Args) -> windows::Result<u8> {
                 .chunks_exact_mut((blockalign / channel_count) as usize)
                 .enumerate()
             {
-                let sample_option = q.read(channel_index);
-                if let Some(sample) = sample_option {
-                    let sample_bytes = sample.to_le_bytes();
-                    for (bufbyte, Cosbyte) in value.iter_mut().zip(sample_bytes.iter()) {
-                        *bufbyte = *Cosbyte;
-                    }
-                    is_exist_sample = true;
+                let sample = q.next(channel_index);
+                let sample_bytes = sample.to_le_bytes();
+                for (bufbyte, cosbyte) in value.iter_mut().zip(sample_bytes.iter()) {
+                    *bufbyte = *cosbyte;
                 }
+                is_exist_sample = true;
             }
         }
 
